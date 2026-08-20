@@ -1,22 +1,19 @@
 const bcrypt = require("bcryptjs");
-const db = require("../config/db");
+const pool = require("../config/db");
 const generateToken = require("../utils/generateToken");
 
-const getAsync = (sql, params = []) =>
-  new Promise((resolve, reject) => {
-    db.get(sql, params, (err, row) => {
-      if (err) reject(err);
-      else resolve(row);
-    });
-  });
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+const getOne = async (sql, params = []) => {
+  const result = await pool.query(sql, params);
+  return result.rows[0] || null;
+};
 
-const runAsync = (sql, params = []) =>
-  new Promise((resolve, reject) => {
-    db.run(sql, params, function (err) {
-      if (err) reject(err);
-      else resolve(this);
-    });
-  });
+const run = async (sql, params = []) => {
+  const result = await pool.query(sql, params);
+  return result.rows[0] || null; // returns the row when RETURNING is used
+};
+
+// ─── Controllers ─────────────────────────────────────────────────────────────
 
 const loginUser = async (req, res) => {
   try {
@@ -26,9 +23,10 @@ const loginUser = async (req, res) => {
       return res.status(400).json({ message: "Email and password are required" });
     }
 
-    const user = await getAsync(`SELECT * FROM users WHERE email = ?`, [
-      String(email).trim().toLowerCase(),
-    ]);
+    const user = await getOne(
+      `SELECT * FROM users WHERE email = $1`,
+      [String(email).trim().toLowerCase()]
+    );
 
     if (!user) {
       return res.status(401).json({ message: "Invalid email or password" });
@@ -41,18 +39,18 @@ const loginUser = async (req, res) => {
     }
 
     res.json({
-      id: user.id,
-      studentId: user.studentId,
-      name: user.name,
-      email: user.email,
-      phone: user.phone,
-      course: user.course,
-      year: user.year,
+      id:            user.id,
+      studentId:     user.studentId,
+      name:          user.name,
+      email:         user.email,
+      phone:         user.phone,
+      course:        user.course,
+      year:          user.year,
       parentContact: user.parentContact,
-      room: user.room,
-      hostelBlock: user.hostelBlock,
-      role: user.role,
-      token: generateToken(user.id),
+      room:          user.room,
+      hostelBlock:   user.hostelBlock,
+      role:          user.role,
+      token:         generateToken(user.id),
     });
   } catch (error) {
     console.error("Login error:", error);
@@ -68,24 +66,26 @@ const registerStudent = async (req, res) => {
       return res.status(400).json({ message: "Name, email, and password are required" });
     }
 
-    const existingUser = await getAsync(`SELECT * FROM users WHERE email = ?`, [
-      String(email).trim().toLowerCase(),
-    ]);
+    const existingUser = await getOne(
+      `SELECT * FROM users WHERE email = $1`,
+      [String(email).trim().toLowerCase()]
+    );
 
     if (existingUser) {
       return res.status(400).json({ message: "Email already exists" });
     }
 
-    const countRow = await getAsync(
-      `SELECT COUNT(*) as total FROM users WHERE role = 'student'`
+    const countRow = await getOne(
+      `SELECT COUNT(*) AS total FROM users WHERE role = 'student'`
     );
 
     const studentId = `STD${1000 + Number(countRow?.total || 0) + 1}`;
     const hashedPassword = await bcrypt.hash(password, 10);
 
-    const result = await runAsync(
-      `INSERT INTO users (studentId, name, email, password, phone, course, year, parentContact, room, hostelBlock, role)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    const user = await run(
+      `INSERT INTO users ("studentId", name, email, password, phone, course, year, "parentContact", room, "hostelBlock", role)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+       RETURNING *`,
       [
         studentId,
         name.trim(),
@@ -101,21 +101,19 @@ const registerStudent = async (req, res) => {
       ]
     );
 
-    const user = await getAsync(`SELECT * FROM users WHERE id = ?`, [result.lastID]);
-
     res.status(201).json({
-      id: user.id,
-      studentId: user.studentId,
-      name: user.name,
-      email: user.email,
-      phone: user.phone,
-      course: user.course,
-      year: user.year,
+      id:            user.id,
+      studentId:     user.studentId,
+      name:          user.name,
+      email:         user.email,
+      phone:         user.phone,
+      course:        user.course,
+      year:          user.year,
       parentContact: user.parentContact,
-      room: user.room,
-      hostelBlock: user.hostelBlock,
-      role: user.role,
-      token: generateToken(user.id),
+      room:          user.room,
+      hostelBlock:   user.hostelBlock,
+      role:          user.role,
+      token:         generateToken(user.id),
     });
   } catch (error) {
     console.error("Registration error:", error);

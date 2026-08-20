@@ -1,58 +1,50 @@
-const db = require("../config/db");
+const pool = require("../config/db");
 
 const ROOM_PRICE_MAP = {
-  "AC-1": 8000,
-  "AC-2": 7800,
-  "AC-3": 7000,
-  "AC-4": 6500,
+  "AC-1":     8000,
+  "AC-2":     7800,
+  "AC-3":     7000,
+  "AC-4":     6500,
   "Non AC-1": 7000,
   "Non AC-2": 6200,
   "Non AC-3": 5600,
   "Non AC-4": 5000,
 };
 
-const getRoomPrice = (roomType, sharing) => {
-  return ROOM_PRICE_MAP[`${roomType}-${sharing}`] || 5500;
+const getRoomPrice = (roomType, sharing) =>
+  ROOM_PRICE_MAP[`${roomType}-${sharing}`] || 5500;
+
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+const allRows = async (sql, params = []) => {
+  const result = await pool.query(sql, params);
+  return result.rows;
 };
 
-const allAsync = (sql, params = []) =>
-  new Promise((resolve, reject) => {
-    db.all(sql, params, (err, rows) => {
-      if (err) reject(err);
-      else resolve(rows);
-    });
-  });
+const getOne = async (sql, params = []) => {
+  const result = await pool.query(sql, params);
+  return result.rows[0] || null;
+};
 
-const getAsync = (sql, params = []) =>
-  new Promise((resolve, reject) => {
-    db.get(sql, params, (err, row) => {
-      if (err) reject(err);
-      else resolve(row);
-    });
-  });
-
-const runAsync = (sql, params = []) =>
-  new Promise((resolve, reject) => {
-    db.run(sql, params, function (err) {
-      if (err) reject(err);
-      else resolve(this);
-    });
-  });
+const run = async (sql, params = []) => {
+  const result = await pool.query(sql, params);
+  return result.rows[0] || null;
+};
 
 const normalizeFee = (fee) => {
   if (!fee) return null;
-
   return {
     ...fee,
-    paymentHistory: fee.paymentHistory ? JSON.parse(fee.paymentHistory) : [],
+    paymentHistory: fee.paymentHistory
+      ? JSON.parse(fee.paymentHistory)
+      : [],
   };
 };
 
-/* ---------------------- Rooms ---------------------- */
+/* ─────────────────────────── Rooms ─────────────────────────────────────── */
 
 const getRooms = async (req, res) => {
   try {
-    const rooms = await allAsync(`SELECT * FROM rooms ORDER BY roomNo ASC`);
+    const rooms = await allRows(`SELECT * FROM rooms ORDER BY "roomNo" ASC`);
     res.json(rooms);
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -71,17 +63,18 @@ const addRoom = async (req, res) => {
       return res.status(400).json({ message: "All room fields are required" });
     }
 
-    const existing = await getAsync(`SELECT * FROM rooms WHERE roomNo = ?`, [roomNo]);
+    const existing = await getOne(`SELECT * FROM rooms WHERE "roomNo" = $1`, [roomNo]);
     if (existing) {
       return res.status(400).json({ message: "Room number already exists" });
     }
 
     const numericSharing = Number(sharing);
-    const monthlyFee = getRoomPrice(roomType, numericSharing);
+    const monthlyFee     = getRoomPrice(roomType, numericSharing);
 
-    const result = await runAsync(
-      `INSERT INTO rooms (roomSeries, roomNo, block, floor, sharing, roomType, capacity, occupied, monthlyFee)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    const room = await run(
+      `INSERT INTO rooms ("roomSeries", "roomNo", block, floor, sharing, "roomType", capacity, occupied, "monthlyFee")
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+       RETURNING *`,
       [
         roomSeries,
         roomNo,
@@ -95,7 +88,6 @@ const addRoom = async (req, res) => {
       ]
     );
 
-    const room = await getAsync(`SELECT * FROM rooms WHERE id = ?`, [result.lastID]);
     res.status(201).json(room);
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -109,21 +101,21 @@ const updateRoom = async (req, res) => {
     }
 
     const { id } = req.params;
-    const existing = await getAsync(`SELECT * FROM rooms WHERE id = ?`, [id]);
+    const existing = await getOne(`SELECT * FROM rooms WHERE id = $1`, [id]);
 
     if (!existing) {
       return res.status(404).json({ message: "Room not found" });
     }
 
     const nextRoomSeries = req.body.roomSeries ?? existing.roomSeries;
-    const nextRoomNo = req.body.roomNo ?? existing.roomNo;
-    const nextFloor = Number(req.body.floor ?? existing.floor);
-    const nextSharing = Number(req.body.sharing ?? existing.sharing);
-    const nextRoomType = req.body.roomType ?? existing.roomType;
+    const nextRoomNo     = req.body.roomNo     ?? existing.roomNo;
+    const nextFloor      = Number(req.body.floor    ?? existing.floor);
+    const nextSharing    = Number(req.body.sharing  ?? existing.sharing);
+    const nextRoomType   = req.body.roomType   ?? existing.roomType;
     const nextMonthlyFee = getRoomPrice(nextRoomType, nextSharing);
 
-    const duplicate = await getAsync(
-      `SELECT * FROM rooms WHERE roomNo = ? AND id != ?`,
+    const duplicate = await getOne(
+      `SELECT * FROM rooms WHERE "roomNo" = $1 AND id != $2`,
       [nextRoomNo, id]
     );
 
@@ -131,10 +123,12 @@ const updateRoom = async (req, res) => {
       return res.status(400).json({ message: "Another room already uses this room number" });
     }
 
-    await runAsync(
+    const updated = await run(
       `UPDATE rooms
-       SET roomSeries = ?, roomNo = ?, block = ?, floor = ?, sharing = ?, roomType = ?, capacity = ?, monthlyFee = ?
-       WHERE id = ?`,
+       SET "roomSeries" = $1, "roomNo" = $2, block = $3, floor = $4, sharing = $5,
+           "roomType" = $6, capacity = $7, "monthlyFee" = $8
+       WHERE id = $9
+       RETURNING *`,
       [
         nextRoomSeries,
         nextRoomNo,
@@ -148,7 +142,6 @@ const updateRoom = async (req, res) => {
       ]
     );
 
-    const updated = await getAsync(`SELECT * FROM rooms WHERE id = ?`, [id]);
     res.json(updated);
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -163,8 +156,8 @@ const assignRoomToStudent = async (req, res) => {
 
     const { studentId, roomId } = req.body;
 
-    const student = await getAsync(`SELECT * FROM users WHERE id = ?`, [studentId]);
-    const targetRoom = await getAsync(`SELECT * FROM rooms WHERE id = ?`, [roomId]);
+    const student    = await getOne(`SELECT * FROM users WHERE id = $1`, [studentId]);
+    const targetRoom = await getOne(`SELECT * FROM rooms WHERE id = $1`, [roomId]);
 
     if (!student || student.role !== "student") {
       return res.status(404).json({ message: "Student not found" });
@@ -178,34 +171,36 @@ const assignRoomToStudent = async (req, res) => {
       return res.status(400).json({ message: "Selected room is already full" });
     }
 
-    const previousRoom = student.room && student.room !== "Not Allotted"
-      ? await getAsync(`SELECT * FROM rooms WHERE roomNo = ?`, [student.room])
-      : null;
+    const previousRoom =
+      student.room && student.room !== "Not Allotted"
+        ? await getOne(`SELECT * FROM rooms WHERE "roomNo" = $1`, [student.room])
+        : null;
 
     if (previousRoom && Number(previousRoom.id) === Number(targetRoom.id)) {
       return res.status(400).json({ message: "Student is already allotted to this room" });
     }
 
     if (previousRoom) {
-      await runAsync(
-        `UPDATE rooms SET occupied = ? WHERE id = ?`,
+      await run(
+        `UPDATE rooms SET occupied = $1 WHERE id = $2`,
         [Math.max(0, Number(previousRoom.occupied || 0) - 1), previousRoom.id]
       );
     }
 
-    await runAsync(
-      `UPDATE rooms SET occupied = ? WHERE id = ?`,
+    await run(
+      `UPDATE rooms SET occupied = $1 WHERE id = $2`,
       [Number(targetRoom.occupied || 0) + 1, targetRoom.id]
     );
 
-    await runAsync(
-      `UPDATE users SET room = ?, hostelBlock = ? WHERE id = ?`,
+    await run(
+      `UPDATE users SET room = $1, "hostelBlock" = $2 WHERE id = $3`,
       [targetRoom.roomNo, targetRoom.block, student.id]
     );
 
-    const fee = await getAsync(`SELECT * FROM fees WHERE studentId = ? ORDER BY id DESC LIMIT 1`, [
-      student.studentId,
-    ]);
+    const fee = await getOne(
+      `SELECT * FROM fees WHERE "studentId" = $1 ORDER BY id DESC LIMIT 1`,
+      [student.studentId]
+    );
 
     if (fee) {
       const paidAmount = Number(fee.paidAmount || 0);
@@ -216,14 +211,14 @@ const assignRoomToStudent = async (req, res) => {
           ? "Partial"
           : "Pending";
 
-      await runAsync(
-        `UPDATE fees SET amount = ?, status = ? WHERE id = ?`,
+      await run(
+        `UPDATE fees SET amount = $1, status = $2 WHERE id = $3`,
         [Number(targetRoom.monthlyFee), nextStatus, fee.id]
       );
     } else {
-      await runAsync(
-        `INSERT INTO fees (studentId, studentName, amount, paidAmount, dueDate, status, paymentHistory)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      await run(
+        `INSERT INTO fees ("studentId", "studentName", amount, "paidAmount", "dueDate", status, "paymentHistory")
+         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
         [
           student.studentId,
           student.name,
@@ -236,35 +231,27 @@ const assignRoomToStudent = async (req, res) => {
       );
     }
 
-    await runAsync(
-      `INSERT INTO notifications (recipientRole, title, message, isRead)
-       VALUES (?, ?, ?, ?)`,
-      [
-        "student",
-        "Room Allotted",
-        `You have been allotted room ${targetRoom.roomNo}.`,
-        0,
-      ]
+    await run(
+      `INSERT INTO notifications ("recipientRole", title, message, "isRead")
+       VALUES ($1, $2, $3, $4)`,
+      ["student", "Room Allotted", `You have been allotted room ${targetRoom.roomNo}.`, false]
     );
 
-    const updatedStudent = await getAsync(`SELECT * FROM users WHERE id = ?`, [student.id]);
+    const updatedStudent = await getOne(`SELECT * FROM users WHERE id = $1`, [student.id]);
     res.json(updatedStudent);
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
 };
 
-/* ---------------------- Fees ---------------------- */
+/* ─────────────────────────── Fees ──────────────────────────────────────── */
 
 const getStudentFee = async (req, res) => {
   try {
-    const studentId = req.user.studentId;
-
-    const fee = await getAsync(
-      `SELECT * FROM fees WHERE studentId = ? ORDER BY id DESC LIMIT 1`,
-      [studentId]
+    const fee = await getOne(
+      `SELECT * FROM fees WHERE "studentId" = $1 ORDER BY id DESC LIMIT 1`,
+      [req.user.studentId]
     );
-
     res.json(normalizeFee(fee));
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -273,12 +260,11 @@ const getStudentFee = async (req, res) => {
 
 const payStudentFee = async (req, res) => {
   try {
-    const studentId = req.user.studentId;
     const { amount, paymentMethod, paymentDetails } = req.body;
 
-    const fee = await getAsync(
-      `SELECT * FROM fees WHERE studentId = ? ORDER BY id DESC LIMIT 1`,
-      [studentId]
+    const fee = await getOne(
+      `SELECT * FROM fees WHERE "studentId" = $1 ORDER BY id DESC LIMIT 1`,
+      [req.user.studentId]
     );
 
     if (!fee) {
@@ -290,45 +276,48 @@ const payStudentFee = async (req, res) => {
       return res.status(400).json({ message: "Valid payment amount is required" });
     }
 
-    const totalFee = Number(fee.amount || 0);
+    const totalFee    = Number(fee.amount || 0);
     const currentPaid = Number(fee.paidAmount || 0);
-    const nextPaid = Math.min(currentPaid + paymentAmount, totalFee);
-    const remaining = Math.max(0, totalFee - nextPaid);
+    const nextPaid    = Math.min(currentPaid + paymentAmount, totalFee);
+    const remaining   = Math.max(0, totalFee - nextPaid);
 
     const nextStatus =
       remaining <= 0 ? "Paid" : nextPaid > 0 ? "Partial" : "Pending";
 
-    const currentHistory = fee.paymentHistory ? JSON.parse(fee.paymentHistory) : [];
+    const currentHistory = fee.paymentHistory
+      ? JSON.parse(fee.paymentHistory)
+      : [];
+
     const updatedHistory = [
       {
-        id: `PAY${Date.now()}`,
-        amount: paymentAmount,
-        method: paymentMethod || "UPI",
+        id:      `PAY${Date.now()}`,
+        amount:  paymentAmount,
+        method:  paymentMethod || "UPI",
         details: paymentDetails || {},
-        date: new Date().toISOString(),
+        date:    new Date().toISOString(),
       },
       ...currentHistory,
     ];
 
-    await runAsync(
+    const updatedFee = await run(
       `UPDATE fees
-       SET paidAmount = ?, status = ?, paymentHistory = ?
-       WHERE id = ?`,
+       SET "paidAmount" = $1, status = $2, "paymentHistory" = $3
+       WHERE id = $4
+       RETURNING *`,
       [nextPaid, nextStatus, JSON.stringify(updatedHistory), fee.id]
     );
 
-    await runAsync(
-      `INSERT INTO notifications (recipientRole, title, message, isRead)
-       VALUES (?, ?, ?, ?)`,
+    await run(
+      `INSERT INTO notifications ("recipientRole", title, message, "isRead")
+       VALUES ($1, $2, $3, $4)`,
       [
         "warden",
         "Fee Payment Update",
         `${req.user.name} made a fee payment using ${paymentMethod || "UPI"}.`,
-        0,
+        false,
       ]
     );
 
-    const updatedFee = await getAsync(`SELECT * FROM fees WHERE id = ?`, [fee.id]);
     res.json(normalizeFee(updatedFee));
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -340,10 +329,8 @@ const getAllFees = async (req, res) => {
     if (!["admin", "warden"].includes(req.user.role)) {
       return res.status(403).json({ message: "Access denied" });
     }
-
-    const fees = await allAsync(`SELECT * FROM fees ORDER BY id DESC`);
-    const normalized = fees.map(normalizeFee);
-    res.json(normalized);
+    const fees = await allRows(`SELECT * FROM fees ORDER BY id DESC`);
+    res.json(fees.map(normalizeFee));
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
@@ -355,41 +342,42 @@ const updateFeeStatus = async (req, res) => {
       return res.status(403).json({ message: "Access denied" });
     }
 
-    const { id } = req.params;
+    const { id }     = req.params;
     const { status } = req.body;
 
     if (!status) {
       return res.status(400).json({ message: "Status is required" });
     }
 
-    const fee = await getAsync(`SELECT * FROM fees WHERE id = ?`, [id]);
+    const fee = await getOne(`SELECT * FROM fees WHERE id = $1`, [id]);
     if (!fee) {
       return res.status(404).json({ message: "Fee record not found" });
     }
 
-    await runAsync(`UPDATE fees SET status = ? WHERE id = ?`, [status, id]);
+    const updatedFee = await run(
+      `UPDATE fees SET status = $1 WHERE id = $2 RETURNING *`,
+      [status, id]
+    );
 
-    const updatedFee = await getAsync(`SELECT * FROM fees WHERE id = ?`, [id]);
-
-    await runAsync(
-      `INSERT INTO notifications (recipientRole, title, message, isRead)
-       VALUES (?, ?, ?, ?)`,
+    await run(
+      `INSERT INTO notifications ("recipientRole", title, message, "isRead")
+       VALUES ($1, $2, $3, $4)`,
       [
         "warden",
         "Fee Status Updated",
         `Fee status for ${fee.studentName} has been updated to ${status}.`,
-        0,
+        false,
       ]
     );
 
-    await runAsync(
-      `INSERT INTO notifications (recipientRole, title, message, isRead)
-       VALUES (?, ?, ?, ?)`,
+    await run(
+      `INSERT INTO notifications ("recipientRole", title, message, "isRead")
+       VALUES ($1, $2, $3, $4)`,
       [
         "student",
         "Fee Status Updated",
         `Your fee status has been updated to ${status}.`,
-        0,
+        false,
       ]
     );
 
@@ -399,11 +387,11 @@ const updateFeeStatus = async (req, res) => {
   }
 };
 
-/* ---------------------- Notices ---------------------- */
+/* ─────────────────────────── Notices ───────────────────────────────────── */
 
 const getStudentNotices = async (req, res) => {
   try {
-    const notices = await allAsync(`SELECT * FROM notices ORDER BY id DESC`);
+    const notices = await allRows(`SELECT * FROM notices ORDER BY id DESC`);
     res.json(notices);
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -423,24 +411,23 @@ const addNotice = async (req, res) => {
     }
 
     const createdBy = req.user.role === "admin" ? "Admin" : "Warden";
-    const date = new Date().toISOString().split("T")[0];
+    const date      = new Date().toISOString().split("T")[0];
 
-    const result = await runAsync(
-      `INSERT INTO notices (title, description, priority, date, createdBy)
-       VALUES (?, ?, ?, ?, ?)`,
+    const notice = await run(
+      `INSERT INTO notices (title, description, priority, date, "createdBy")
+       VALUES ($1, $2, $3, $4, $5)
+       RETURNING *`,
       [title, description, priority || "General", date, createdBy]
     );
 
-    const notice = await getAsync(`SELECT * FROM notices WHERE id = ?`, [result.lastID]);
-
-    await runAsync(
-      `INSERT INTO notifications (recipientRole, title, message, isRead)
-       VALUES (?, ?, ?, ?)`,
+    await run(
+      `INSERT INTO notifications ("recipientRole", title, message, "isRead")
+       VALUES ($1, $2, $3, $4)`,
       [
         "student",
         "New Notice Added",
         `${createdBy} added a new notice: ${title}`,
-        0,
+        false,
       ]
     );
 
@@ -452,47 +439,45 @@ const addNotice = async (req, res) => {
 
 const updateNotice = async (req, res) => {
   try {
-    const { id } = req.params;
+    const { id }                       = req.params;
     const { title, description, priority } = req.body;
 
     if (!["admin", "warden"].includes(req.user.role)) {
       return res.status(403).json({ message: "Access denied" });
     }
 
-    const existing = await getAsync(`SELECT * FROM notices WHERE id = ?`, [id]);
-
+    const existing = await getOne(`SELECT * FROM notices WHERE id = $1`, [id]);
     if (!existing) {
       return res.status(404).json({ message: "Notice not found" });
     }
 
-    await runAsync(
+    const updated = await run(
       `UPDATE notices
-       SET title = ?, description = ?, priority = ?
-       WHERE id = ?`,
+       SET title = $1, description = $2, priority = $3
+       WHERE id = $4
+       RETURNING *`,
       [
-        title ?? existing.title,
+        title       ?? existing.title,
         description ?? existing.description,
-        priority ?? existing.priority,
+        priority    ?? existing.priority,
         id,
       ]
     );
 
-    const updated = await getAsync(`SELECT * FROM notices WHERE id = ?`, [id]);
     res.json(updated);
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
 };
 
-/* ---------------------- Complaints ---------------------- */
+/* ─────────────────────────── Complaints ────────────────────────────────── */
 
 const getMyComplaints = async (req, res) => {
   try {
-    const complaints = await allAsync(
-      `SELECT * FROM complaints WHERE studentId = ? ORDER BY id DESC`,
+    const complaints = await allRows(
+      `SELECT * FROM complaints WHERE "studentId" = $1 ORDER BY id DESC`,
       [req.user.studentId]
     );
-
     res.json(complaints);
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -504,8 +489,7 @@ const getAllComplaints = async (req, res) => {
     if (!["admin", "warden"].includes(req.user.role)) {
       return res.status(403).json({ message: "Access denied" });
     }
-
-    const complaints = await allAsync(`SELECT * FROM complaints ORDER BY id DESC`);
+    const complaints = await allRows(`SELECT * FROM complaints ORDER BY id DESC`);
     res.json(complaints);
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -524,9 +508,10 @@ const addComplaint = async (req, res) => {
 
     const createdAtLabel = new Date().toISOString().split("T")[0];
 
-    const result = await runAsync(
-      `INSERT INTO complaints (studentId, studentName, category, title, description, status, createdAtLabel)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    const complaint = await run(
+      `INSERT INTO complaints ("studentId", "studentName", category, title, description, status, "createdAtLabel")
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       RETURNING *`,
       [
         req.user.studentId,
         req.user.name,
@@ -538,18 +523,14 @@ const addComplaint = async (req, res) => {
       ]
     );
 
-    const complaint = await getAsync(`SELECT * FROM complaints WHERE id = ?`, [
-      result.lastID,
-    ]);
-
-    await runAsync(
-      `INSERT INTO notifications (recipientRole, title, message, isRead)
-       VALUES (?, ?, ?, ?)`,
+    await run(
+      `INSERT INTO notifications ("recipientRole", title, message, "isRead")
+       VALUES ($1, $2, $3, $4)`,
       [
         "warden",
         "New Complaint",
         `${req.user.name} submitted a complaint: ${title}`,
-        0,
+        false,
       ]
     );
 
@@ -561,7 +542,7 @@ const addComplaint = async (req, res) => {
 
 const updateComplaintStatus = async (req, res) => {
   try {
-    const { id } = req.params;
+    const { id }     = req.params;
     const { status } = req.body;
 
     if (!["admin", "warden"].includes(req.user.role)) {
@@ -573,24 +554,24 @@ const updateComplaintStatus = async (req, res) => {
       return res.status(400).json({ message: "Invalid complaint status" });
     }
 
-    const existing = await getAsync(`SELECT * FROM complaints WHERE id = ?`, [id]);
-
+    const existing = await getOne(`SELECT * FROM complaints WHERE id = $1`, [id]);
     if (!existing) {
       return res.status(404).json({ message: "Complaint not found" });
     }
 
-    await runAsync(`UPDATE complaints SET status = ? WHERE id = ?`, [status, id]);
+    const updated = await run(
+      `UPDATE complaints SET status = $1 WHERE id = $2 RETURNING *`,
+      [status, id]
+    );
 
-    const updated = await getAsync(`SELECT * FROM complaints WHERE id = ?`, [id]);
-
-    await runAsync(
-      `INSERT INTO notifications (recipientRole, title, message, isRead)
-       VALUES (?, ?, ?, ?)`,
+    await run(
+      `INSERT INTO notifications ("recipientRole", title, message, "isRead")
+       VALUES ($1, $2, $3, $4)`,
       [
         "student",
         "Complaint Status Updated",
         `Your complaint "${updated.title}" is now marked as ${status}.`,
-        0,
+        false,
       ]
     );
 
@@ -600,15 +581,14 @@ const updateComplaintStatus = async (req, res) => {
   }
 };
 
-/* ---------------------- Leaves ---------------------- */
+/* ─────────────────────────── Leaves ────────────────────────────────────── */
 
 const getMyLeaves = async (req, res) => {
   try {
-    const leaves = await allAsync(
-      `SELECT * FROM leaves_table WHERE studentId = ? ORDER BY id DESC`,
+    const leaves = await allRows(
+      `SELECT * FROM leaves_table WHERE "studentId" = $1 ORDER BY id DESC`,
       [req.user.studentId]
     );
-
     res.json(leaves);
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -620,8 +600,7 @@ const getAllLeaves = async (req, res) => {
     if (!["admin", "warden"].includes(req.user.role)) {
       return res.status(403).json({ message: "Access denied" });
     }
-
-    const leaves = await allAsync(`SELECT * FROM leaves_table ORDER BY id DESC`);
+    const leaves = await allRows(`SELECT * FROM leaves_table ORDER BY id DESC`);
     res.json(leaves);
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -638,31 +617,21 @@ const addLeaveRequest = async (req, res) => {
       });
     }
 
-    const result = await runAsync(
-      `INSERT INTO leaves_table (studentId, studentName, fromDate, toDate, reason, status)
-       VALUES (?, ?, ?, ?, ?, ?)`,
-      [
-        req.user.studentId,
-        req.user.name,
-        fromDate,
-        toDate,
-        reason,
-        "Pending",
-      ]
+    const leave = await run(
+      `INSERT INTO leaves_table ("studentId", "studentName", "fromDate", "toDate", reason, status)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       RETURNING *`,
+      [req.user.studentId, req.user.name, fromDate, toDate, reason, "Pending"]
     );
 
-    const leave = await getAsync(`SELECT * FROM leaves_table WHERE id = ?`, [
-      result.lastID,
-    ]);
-
-    await runAsync(
-      `INSERT INTO notifications (recipientRole, title, message, isRead)
-       VALUES (?, ?, ?, ?)`,
+    await run(
+      `INSERT INTO notifications ("recipientRole", title, message, "isRead")
+       VALUES ($1, $2, $3, $4)`,
       [
         "warden",
         "New Leave Request",
         `${req.user.name} submitted a leave request.`,
-        0,
+        false,
       ]
     );
 
@@ -674,7 +643,7 @@ const addLeaveRequest = async (req, res) => {
 
 const updateLeaveStatus = async (req, res) => {
   try {
-    const { id } = req.params;
+    const { id }     = req.params;
     const { status } = req.body;
 
     if (!["admin", "warden"].includes(req.user.role)) {
@@ -686,24 +655,24 @@ const updateLeaveStatus = async (req, res) => {
       return res.status(400).json({ message: "Invalid leave status" });
     }
 
-    const existing = await getAsync(`SELECT * FROM leaves_table WHERE id = ?`, [id]);
-
+    const existing = await getOne(`SELECT * FROM leaves_table WHERE id = $1`, [id]);
     if (!existing) {
       return res.status(404).json({ message: "Leave request not found" });
     }
 
-    await runAsync(`UPDATE leaves_table SET status = ? WHERE id = ?`, [status, id]);
+    const updated = await run(
+      `UPDATE leaves_table SET status = $1 WHERE id = $2 RETURNING *`,
+      [status, id]
+    );
 
-    const updated = await getAsync(`SELECT * FROM leaves_table WHERE id = ?`, [id]);
-
-    await runAsync(
-      `INSERT INTO notifications (recipientRole, title, message, isRead)
-       VALUES (?, ?, ?, ?)`,
+    await run(
+      `INSERT INTO notifications ("recipientRole", title, message, "isRead")
+       VALUES ($1, $2, $3, $4)`,
       [
         "student",
         "Leave Status Updated",
         `Your leave request from ${updated.fromDate} to ${updated.toDate} is ${status}.`,
-        0,
+        false,
       ]
     );
 
@@ -713,11 +682,11 @@ const updateLeaveStatus = async (req, res) => {
   }
 };
 
-/* ---------------------- Food Menu ---------------------- */
+/* ─────────────────────────── Food Menu ─────────────────────────────────── */
 
 const getFoodMenu = async (req, res) => {
   try {
-    const menu = await allAsync(`SELECT * FROM food_menu ORDER BY id ASC`);
+    const menu = await allRows(`SELECT * FROM food_menu ORDER BY id ASC`);
     res.json(menu);
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -731,7 +700,7 @@ const updateFoodMenuItem = async (req, res) => {
     }
 
     const { id } = req.params;
-    const existing = await getAsync(`SELECT * FROM food_menu WHERE id = ?`, [id]);
+    const existing = await getOne(`SELECT * FROM food_menu WHERE id = $1`, [id]);
 
     if (!existing) {
       return res.status(404).json({ message: "Food menu item not found" });
@@ -739,27 +708,27 @@ const updateFoodMenuItem = async (req, res) => {
 
     const { breakfast, lunch, snacks, dinner } = req.body;
 
-    await runAsync(
+    const updated = await run(
       `UPDATE food_menu
-       SET breakfast = ?, lunch = ?, snacks = ?, dinner = ?
-       WHERE id = ?`,
+       SET breakfast = $1, lunch = $2, snacks = $3, dinner = $4
+       WHERE id = $5
+       RETURNING *`,
       [
         breakfast ?? existing.breakfast,
-        lunch ?? existing.lunch,
-        snacks ?? existing.snacks,
-        dinner ?? existing.dinner,
+        lunch     ?? existing.lunch,
+        snacks    ?? existing.snacks,
+        dinner    ?? existing.dinner,
         id,
       ]
     );
 
-    const updated = await getAsync(`SELECT * FROM food_menu WHERE id = ?`, [id]);
     res.json(updated);
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
 };
 
-/* ---------------------- Students ---------------------- */
+/* ─────────────────────────── Students ──────────────────────────────────── */
 
 const getStudents = async (req, res) => {
   try {
@@ -767,8 +736,8 @@ const getStudents = async (req, res) => {
       return res.status(403).json({ message: "Access denied" });
     }
 
-    const students = await allAsync(
-      `SELECT id, studentId, name, email, phone, course, year, parentContact, room, hostelBlock, role
+    const students = await allRows(
+      `SELECT id, "studentId", name, email, phone, course, year, "parentContact", room, "hostelBlock", role
        FROM users
        WHERE role = 'student'
        ORDER BY id DESC`
@@ -787,33 +756,33 @@ const updateStudentByAdminOrWarden = async (req, res) => {
     }
 
     const { id } = req.params;
-    const existing = await getAsync(`SELECT * FROM users WHERE id = ?`, [id]);
+    const existing = await getOne(`SELECT * FROM users WHERE id = $1`, [id]);
 
     if (!existing || existing.role !== "student") {
       return res.status(404).json({ message: "Student not found" });
     }
 
-    const nextName = req.body.name ?? existing.name;
-    const nextPhone = req.body.phone ?? existing.phone;
-    const nextCourse = req.body.course ?? existing.course;
-    const nextYear = req.body.year ?? existing.year;
+    const nextName          = req.body.name          ?? existing.name;
+    const nextPhone         = req.body.phone         ?? existing.phone;
+    const nextCourse        = req.body.course        ?? existing.course;
+    const nextYear          = req.body.year          ?? existing.year;
     const nextParentContact = req.body.parentContact ?? existing.parentContact;
 
-    await runAsync(
+    await run(
       `UPDATE users
-       SET name = ?, phone = ?, course = ?, year = ?, parentContact = ?
-       WHERE id = ?`,
+       SET name = $1, phone = $2, course = $3, year = $4, "parentContact" = $5
+       WHERE id = $6`,
       [nextName, nextPhone, nextCourse, nextYear, nextParentContact, id]
     );
 
-    await runAsync(
-      `UPDATE fees SET studentName = ? WHERE studentId = ?`,
+    await run(
+      `UPDATE fees SET "studentName" = $1 WHERE "studentId" = $2`,
       [nextName, existing.studentId]
     );
 
-    const updated = await getAsync(
-      `SELECT id, studentId, name, email, phone, course, year, parentContact, room, hostelBlock, role
-       FROM users WHERE id = ?`,
+    const updated = await getOne(
+      `SELECT id, "studentId", name, email, phone, course, year, "parentContact", room, "hostelBlock", role
+       FROM users WHERE id = $1`,
       [id]
     );
 
@@ -823,20 +792,20 @@ const updateStudentByAdminOrWarden = async (req, res) => {
   }
 };
 
-/* ---------------------- Notifications ---------------------- */
+/* ─────────────────────────── Notifications ─────────────────────────────── */
 
 const getNotificationsByRole = async (req, res) => {
   try {
-    const notifications = await allAsync(
+    const notifications = await allRows(
       `SELECT * FROM notifications
-       WHERE recipientRole = ?
+       WHERE "recipientRole" = $1
        ORDER BY id DESC`,
       [req.user.role]
     );
 
     const mapped = notifications.map((item) => ({
       ...item,
-      isRead: Boolean(item.isRead),
+      isRead:    Boolean(item.isRead),
       createdAt: item.createdAt,
     }));
 
@@ -848,21 +817,21 @@ const getNotificationsByRole = async (req, res) => {
 
 const markAllNotificationsRead = async (req, res) => {
   try {
-    await runAsync(
-      `UPDATE notifications SET isRead = 1 WHERE recipientRole = ?`,
+    await run(
+      `UPDATE notifications SET "isRead" = true WHERE "recipientRole" = $1`,
       [req.user.role]
     );
 
-    const notifications = await allAsync(
+    const notifications = await allRows(
       `SELECT * FROM notifications
-       WHERE recipientRole = ?
+       WHERE "recipientRole" = $1
        ORDER BY id DESC`,
       [req.user.role]
     );
 
     const mapped = notifications.map((item) => ({
       ...item,
-      isRead: Boolean(item.isRead),
+      isRead:    Boolean(item.isRead),
       createdAt: item.createdAt,
     }));
 
