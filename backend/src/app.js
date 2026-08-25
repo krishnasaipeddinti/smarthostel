@@ -12,6 +12,7 @@ const app = express();
 // Allow both the deployed Vercel frontend and the local dev server
 const allowedOrigins = [
   "https://smarthostel-nine.vercel.app",
+  "https://smarthostel-sai.vercel.app",
   "http://localhost:5173",
   "http://localhost:3000",
 ];
