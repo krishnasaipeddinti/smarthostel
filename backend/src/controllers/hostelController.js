@@ -57,7 +57,7 @@ const addRoom = async (req, res) => {
       return res.status(403).json({ message: "Access denied" });
     }
 
-    const { roomSeries, roomNo, floor, sharing, roomType, monthlyFee: customFee } = req.body;
+    const { roomSeries, roomNo, floor, sharing, roomType } = req.body;
 
     if (!roomSeries || !roomNo || !floor || !sharing || !roomType) {
       return res.status(400).json({ message: "All room fields are required" });
@@ -69,10 +69,7 @@ const addRoom = async (req, res) => {
     }
 
     const numericSharing = Number(sharing);
-    const monthlyFee =
-      customFee !== undefined && customFee !== null && customFee !== ""
-        ? Number(customFee)
-        : getRoomPrice(roomType, numericSharing);
+    const monthlyFee     = getRoomPrice(roomType, numericSharing);
 
     const room = await run(
       `INSERT INTO rooms ("roomSeries", "roomNo", block, floor, sharing, "roomType", capacity, occupied, "monthlyFee")
@@ -115,10 +112,7 @@ const updateRoom = async (req, res) => {
     const nextFloor      = Number(req.body.floor    ?? existing.floor);
     const nextSharing    = Number(req.body.sharing  ?? existing.sharing);
     const nextRoomType   = req.body.roomType   ?? existing.roomType;
-    const nextMonthlyFee =
-      req.body.monthlyFee !== undefined && req.body.monthlyFee !== null && req.body.monthlyFee !== ""
-        ? Number(req.body.monthlyFee)
-        : getRoomPrice(nextRoomType, nextSharing);
+    const nextMonthlyFee = getRoomPrice(nextRoomType, nextSharing);
 
     const duplicate = await getOne(
       `SELECT * FROM rooms WHERE "roomNo" = $1 AND id != $2`,
@@ -127,10 +121,6 @@ const updateRoom = async (req, res) => {
 
     if (duplicate) {
       return res.status(400).json({ message: "Another room already uses this room number" });
-    }
-
-    if (nextRoomNo !== existing.roomNo) {
-      await run(`UPDATE users SET room = $1 WHERE room = $2`, [nextRoomNo, existing.roomNo]);
     }
 
     const updated = await run(
@@ -153,44 +143,6 @@ const updateRoom = async (req, res) => {
     );
 
     res.json(updated);
-  } catch (error) {
-    res.status(500).json({ message: error.message });
-  }
-};
-
-const deleteRoom = async (req, res) => {
-  try {
-    if (!["admin", "warden"].includes(req.user.role)) {
-      return res.status(403).json({ message: "Access denied" });
-    }
-
-    const { id } = req.params;
-    const existing = await getOne(`SELECT * FROM rooms WHERE id = $1`, [id]);
-
-    if (!existing) {
-      return res.status(404).json({ message: "Room not found" });
-    }
-
-    if (Number(existing.occupied) > 0) {
-      return res.status(400).json({
-        message: `Cannot delete room ${existing.roomNo} because it currently has ${existing.occupied} student(s) allotted. Please reassign students first.`,
-      });
-    }
-
-    const assignedStudents = await allRows(
-      `SELECT id, name FROM users WHERE room = $1`,
-      [existing.roomNo]
-    );
-
-    if (assignedStudents && assignedStudents.length > 0) {
-      return res.status(400).json({
-        message: `Cannot delete room ${existing.roomNo} because student(s) (${assignedStudents.map((s) => s.name).join(", ")}) are assigned to it. Please reassign them first.`,
-      });
-    }
-
-    await run(`DELETE FROM rooms WHERE id = $1`, [id]);
-
-    res.json({ message: "Room deleted successfully", id });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
@@ -893,7 +845,6 @@ module.exports = {
   getRooms,
   addRoom,
   updateRoom,
-  deleteRoom,
   assignRoomToStudent,
   getStudentFee,
   payStudentFee,
