@@ -15,6 +15,11 @@ export const updateRoomApi = async (id, payload) => {
   return res.data;
 };
 
+export const deleteRoomApi = async (id) => {
+  const res = await API.delete(`/hostel/rooms/${id}`);
+  return res.data;
+};
+
 export const assignRoomApi = async (payload) => {
   const res = await API.post("/hostel/rooms/assign", payload);
   return res.data;

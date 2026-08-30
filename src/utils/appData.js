@@ -229,7 +229,10 @@ export const addRoom = (payload) => {
 
   const sharing = Number(payload.sharing);
   const roomType = payload.roomType;
-  const monthlyFee = getRoomPrice(roomType, sharing);
+  const monthlyFee =
+    payload.monthlyFee !== undefined && payload.monthlyFee !== null && payload.monthlyFee !== ""
+      ? Number(payload.monthlyFee)
+      : getRoomPrice(roomType, sharing);
 
   const newRoom = {
     id: `R${Date.now()}`,
@@ -257,16 +260,33 @@ export const updateRoom = (id, payload) => {
 
     const nextSharing = Number(payload.sharing ?? room.sharing);
     const nextRoomType = payload.roomType ?? room.roomType;
+    const nextMonthlyFee =
+      payload.monthlyFee !== undefined && payload.monthlyFee !== null && payload.monthlyFee !== ""
+        ? Number(payload.monthlyFee)
+        : getRoomPrice(nextRoomType, nextSharing);
 
     return {
       ...room,
       ...payload,
       sharing: nextSharing,
       capacity: nextSharing,
-      monthlyFee: getRoomPrice(nextRoomType, nextSharing),
+      monthlyFee: nextMonthlyFee,
     };
   });
 
+  setStorageData(KEYS.ROOMS, updated);
+  return updated;
+};
+
+export const deleteRoom = (id) => {
+  const rooms = getStorageData(KEYS.ROOMS, []);
+  const target = rooms.find((r) => r.id === id);
+
+  if (target && Number(target.occupied || 0) > 0) {
+    throw new Error(`Cannot delete room ${target.roomNo} because it has occupied students.`);
+  }
+
+  const updated = rooms.filter((r) => r.id !== id);
   setStorageData(KEYS.ROOMS, updated);
   return updated;
 };

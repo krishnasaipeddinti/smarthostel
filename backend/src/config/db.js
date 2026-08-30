@@ -1,7 +1,7 @@
 const { Pool } = require("pg");
 
 const isSupabase =
-  process.env.DATABASE_URL && process.env.DATABASE_URL.includes("supabase.co");
+  Boolean(process.env.DATABASE_URL && process.env.DATABASE_URL.includes("supabase"));
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,

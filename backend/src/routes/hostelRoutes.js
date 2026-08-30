@@ -5,6 +5,7 @@ const {
   getRooms,
   addRoom,
   updateRoom,
+  deleteRoom,
   assignRoomToStudent,
   getStudentFee,
   payStudentFee,
@@ -34,6 +35,7 @@ const { protect } = require("../middleware/authMiddleware");
 router.get("/rooms", protect, getRooms);
 router.post("/rooms", protect, addRoom);
 router.put("/rooms/:id", protect, updateRoom);
+router.delete("/rooms/:id", protect, deleteRoom);
 router.post("/rooms/assign", protect, assignRoomToStudent);
 
 router.get("/fees/me", protect, getStudentFee);
